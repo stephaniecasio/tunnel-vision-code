@@ -1,26 +1,53 @@
 import time
+import csv
+import os
+from datetime import datetime
 import board
 import adafruit_dht
+
+# ---- Settings ----
+CSV_FILENAME = "dht22_readings.csv"
+READ_INTERVAL_SECONDS = 2  # DHT22 needs at least 2 seconds between reads
 
 # Initialize the sensor on GPIO4 (physical pin 7)
 dht = adafruit_dht.DHT22(board.D4)
 
-print("Starting DHT22 test... Press CTRL+C to stop")
+# Create the CSV file with a header row if it doesn't already exist
+file_exists = os.path.isfile(CSV_FILENAME)
 
-while True:
-    try:
-        temperature_c = dht.temperature
-        temperature_f = temperature_c * (9 / 5) + 32
-        humidity = dht.humidity
+if not file_exists:
+    with open(CSV_FILENAME, mode="w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Timestamp", "Temperature_C", "Temperature_F", "Humidity_%"])
 
-        print(f"Temp: {temperature_c:.1f}°C / {temperature_f:.1f}°F   Humidity: {humidity:.1f}%")
+print(f"Starting DHT22 test... Logging to '{CSV_FILENAME}'. Press CTRL+C to stop.")
 
-    except RuntimeError as error:
-        # DHT sensors occasionally fail to read - this is normal, just retry
-        print(f"Reading failed: {error.args[0]}")
+try:
+    while True:
+        try:
+            temperature_c = dht.temperature
+            temperature_f = temperature_c * (9 / 5) + 32
+            humidity = dht.humidity
 
-    except Exception as error:
-        dht.exit()
-        raise error
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    time.sleep(2)  # DHT22 needs at least 2 seconds between reads
+            print(f"{timestamp}  Temp: {temperature_c:.1f}°C / {temperature_f:.1f}°F   Humidity: {humidity:.1f}%")
+
+            # Append this reading to the CSV file
+            with open(CSV_FILENAME, mode="a", newline="") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow([timestamp, f"{temperature_c:.1f}", f"{temperature_f:.1f}", f"{humidity:.1f}"])
+
+        except RuntimeError as error:
+            # DHT sensors occasionally fail to read - this is normal, just retry
+            print(f"Reading failed: {error.args[0]}")
+
+        except Exception as error:
+            dht.exit()
+            raise error
+
+        time.sleep(READ_INTERVAL_SECONDS)
+
+except KeyboardInterrupt:
+    print("\nStopped by user. Readings saved to", CSV_FILENAME)
+    dht.exit()
