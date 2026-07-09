@@ -185,12 +185,8 @@ def sensor_logging_loop(sensor, stop_event: threading.Event):
 # ******* MAIN **********
 def main():
     setup_dirs()    # creates directory and csv file
-    #setup_gpio()    # initializes pi GPIO pins
+    setup_gpio()    # initializes pi GPIO pins
 
-    # TEMPORARY REPLACEMENT TO TEST PI -- leave only setup_dirs()
-    print("GPIO initialized.")  # verifies GPIO library works, no pin numbering errors, no wiring issues
-    time.sleep(5)
-    GPIO.cleanup()
 
     # testing order: 
     # directory creation
@@ -251,41 +247,41 @@ def main():
 
     # open log.csv and confirm rows were added
 
-    # UNCOMMENT FOR REAL (APART OF MAIN)
-#     sensor = adafruit_dht.DHT22(DHT_GPIO, use_pulseio = False)      # creates DHT22 sensor object
+     UNCOMMENT FOR REAL (APART OF MAIN)
+     sensor = adafruit_dht.DHT22(DHT_GPIO, use_pulseio = False)      # creates DHT22 sensor object
 
-#     stop_event = threading.Event()      # creates event that stops logging thread later
+     stop_event = threading.Event()      # creates event that stops logging thread later
     
-#     logger_thread = threading.Thread(       # creates new thread: reads DHT22 sensor, logs to csv
-#         target = sensor_logging_loop, args = (sensor, stop_event), daemon=True
-#     )
+     logger_thread = threading.Thread(       # creates new thread: reads DHT22 sensor, logs to csv
+         target = sensor_logging_loop, args = (sensor, stop_event), daemon=True
+     )
 
-#     try:
-#         ring_light(True)    # turns light on, stays on for entire run
-#         logger_thread.start()   # starts background logging thread
+     try:
+         ring_light(True)    # turns light on, stays on for entire run
+         logger_thread.start()   # starts background logging thread
         
-#         cam_index = 0   # initializes camera index
-#         while True:     # runs until interrupted
-#             channel = ACTIVE_CAMERAS[cam_index % len(ACTIVE_CAMERAS)]   # selects next camera in list
-#             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")        # creates timestamp that becomes part of video filename
+         cam_index = 0   # initializes camera index
+         while True:     # runs until interrupted
+             channel = ACTIVE_CAMERAS[cam_index % len(ACTIVE_CAMERAS)]   # selects next camera in list
+             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")        # creates timestamp that becomes part of video filename
 
-#             # allows camera loop to safely run and update considering simultaneous with DHT22 data
-#             with _state_lock:   # locks shared info
-#                 _shared_state["camera"] = channel       
-#                 _shared_state["video_file"] = f"cam{channel}_{timestamp}.h264"
+             # allows camera loop to safely run and update considering simultaneous with DHT22 data
+             with _state_lock:   # locks shared info
+                 _shared_state["camera"] = channel       
+                 _shared_state["video_file"] = f"cam{channel}_{timestamp}.h264"
 
-#             record_video_segment(channel, timestamp)    # records video
-#             cam_index += 1      # moves to next camera and reruns loop
+             record_video_segment(channel, timestamp)    # records video
+             cam_index += 1      # moves to next camera and reruns loop
 
-#     except KeyboardInterrupt:       # if user presses ctrl + c, KeyboardInterrupt
-#         print("Stopped by user.")
-#     finally:        # executes no matter what
-#         stop_event.set()    # signals logger thread to stop
-#         logger_thread.join(timeout=5)   # waits up to 5 seconds for logging thread to cleanly finish
-#         ring_light(False)   # turns light off
-#         sensor.exit()       # releases DHT22 sensor resources
-#         GPIO.cleanup()      # resets GPIO pins, leaving pi in clean state for future
+     except KeyboardInterrupt:       # if user presses ctrl + c, KeyboardInterrupt
+         print("Stopped by user.")
+     finally:        # executes no matter what
+         stop_event.set()    # signals logger thread to stop
+         logger_thread.join(timeout=5)   # waits up to 5 seconds for logging thread to cleanly finish
+         ring_light(False)   # turns light off
+         sensor.exit()       # releases DHT22 sensor resources
+         GPIO.cleanup()      # resets GPIO pins, leaving pi in clean state for future
 
 
-# if __name__ == "__main__":      # if file runs directly then main is executed (if file imported into another python program, main() not automatically called)
-#     main()    
+ if __name__ == "__main__":      # if file runs directly then main is executed (if file imported into another python program, main() not automatically called)
+     main()    
