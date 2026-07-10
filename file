@@ -1,6 +1,7 @@
 import time
 import csv
 import os
+import signal
 import subprocess
 from datetime import datetime
 import board
@@ -46,6 +47,17 @@ def push_to_github():
         print(f"Git push failed: {e}")
 
 
+class StopSignal(Exception):
+    """Raised when SIGTERM is received (e.g. from the 'timeout' command)."""
+    pass
+
+
+def handle_sigterm(signum, frame):
+    raise StopSignal()
+
+
+signal.signal(signal.SIGTERM, handle_sigterm)
+
 print(f"Starting DHT22 test... Logging to '{CSV_FILENAME}'. Press CTRL+C to stop.")
 
 try:
@@ -74,7 +86,7 @@ try:
 
         time.sleep(READ_INTERVAL_SECONDS)
 
-except KeyboardInterrupt:
-    print("\nStopped by user. Pushing final readings to GitHub...")
+except (KeyboardInterrupt, StopSignal):
+    print("\nStopping... Pushing final readings to GitHub...")
     dht.exit()
     push_to_github()
