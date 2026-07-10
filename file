@@ -1,0 +1,80 @@
+import time
+import csv
+import os
+import subprocess
+from datetime import datetime
+import board
+import adafruit_dht
+
+# ---- Settings ----
+DATA_FOLDER = "readings"                      # folder where CSV files are stored
+CSV_FILENAME = os.path.join(DATA_FOLDER, "dht22_readings.csv")
+READ_INTERVAL_SECONDS = 2                      # DHT22 needs at least 2 seconds between reads
+
+# Create the data folder if it doesn't exist
+os.makedirs(DATA_FOLDER, exist_ok=True)
+
+# Initialize the sensor on GPIO4 (physical pin 7)
+dht = adafruit_dht.DHT22(board.D4)
+
+# Create the CSV file with a header row if it doesn't already exist
+file_exists = os.path.isfile(CSV_FILENAME)
+
+if not file_exists:
+    with open(CSV_FILENAME, mode="w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Timestamp", "Temperature_C", "Temperature_F", "Humidity_%"])
+
+
+def push_to_github():
+    """Add, commit, and push the CSV file to GitHub."""
+    try:
+        subprocess.run(["git", "add", CSV_FILENAME], check=True)
+
+        # Only commit if there are actually changes staged
+        result = subprocess.run(["git", "diff", "--cached", "--quiet"])
+        if result.returncode == 0:
+            print("No changes to push (CSV unchanged).")
+            return
+
+        commit_message = f"Update readings - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        subprocess.run(["git", "commit", "-m", commit_message], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print("Readings pushed to GitHub successfully.")
+
+    except subprocess.CalledProcessError as e:
+        print(f"Git push failed: {e}")
+
+
+print(f"Starting DHT22 test... Logging to '{CSV_FILENAME}'. Press CTRL+C to stop.")
+
+try:
+    while True:
+        try:
+            temperature_c = dht.temperature
+            temperature_f = temperature_c * (9 / 5) + 32
+            humidity = dht.humidity
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            print(f"{timestamp}  Temp: {temperature_c:.1f}°C / {temperature_f:.1f}°F   Humidity: {humidity:.1f}%")
+
+            # Append this reading to the CSV file
+            with open(CSV_FILENAME, mode="a", newline="") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow([timestamp, f"{temperature_c:.1f}", f"{temperature_f:.1f}", f"{humidity:.1f}"])
+
+        except RuntimeError as error:
+            # DHT sensors occasionally fail to read - this is normal, just retry
+            print(f"Reading failed: {error.args[0]}")
+
+        except Exception as error:
+            dht.exit()
+            raise error
+
+        time.sleep(READ_INTERVAL_SECONDS)
+
+except KeyboardInterrupt:
+    print("\nStopped by user. Pushing final readings to GitHub...")
+    dht.exit()
+    push_to_github()
