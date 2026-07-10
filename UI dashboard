@@ -1,0 +1,543 @@
+<!-- code for UI dashboard for tunnel rover device -->
+<!-- displays .csv and .h264 data from SD card on website -->
+<!-- Lily Secord, Tunnel Vision, SEED 2026 -->
+
+<!DOCTYPE html>         <!-- tells browser it's a modern HTML file -->
+<html lang="en">        <!-- tells browser we're in english -->
+<head>                  <!-- head section, contains info about setup of page (invisible to user)-->
+<meta charset="UTF-8">  <!-- tells browser to use UTF-8 character encoding, preventing odd symbols from appearing in text -->
+<title>Tunnel Vision: Rover Dashboard</title>   <!-- text that appears at top left of browser; title -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- scales page correctly on various device sizes 
+    rather than zooming out to display small version -->
+<link rel="preconnect" href="https://fonts.googleapis.com">     <!-- preconnect: tells browser to open connection so loads more quickly -->
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;
+    700&display=swap" rel="stylesheet">   <!-- grabbing fonts from Google; display = swap: user sees standard system text ASAP and 
+    then swaps to IBM fonts when done downloading (screen is never blank)-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>     <!-- loads PapaParse 
+    (library for handling CSV), need because CSV raw hard for browsers to read if have quotes or commas nested: takes messy 
+    data and converts into clean Java -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>      <!-- loads Chart.js 
+    library, used to draw clean charts with HTML5 canvas. takes data processed by PapaParse and renders it visually -->
+<style>
+    :root{                      /* settings panel: defines everything (colors and fonts) once to be reused throughout */  
+        --bg: #101316;        /* background color (absolute) of page */
+        --bg-grid: #171b1f;   /* color for background gridlines */
+        --panel: #1a1f25;     /* allows cards, containers, and sidebars to pop from background */
+        --panel-2: #20262d;   /* ^^^ */
+        --line: #2a3138;      /* used for thin borders and dividers separating sections */
+        --text: #e7ecef;      /* main headings and primary info */
+        --text-dim: #8a95a1;  /* secondary text, labels, captions */
+        --text-faint: #5a6570;  /* subtle hints or placeholder text */
+        --temp: #ef8354;      /* specifically for temp */
+        --temp-dim: #7a5240;  /* ^^^ */
+        --hum: #4fb6c2;       /* specifically for hum */
+        --hum-dim: #375258;   /* ^^^ */
+        --warn: #ffb020;      /* for warnings */
+        --danger: #ff4d4d;    /* for errors or critical failures */
+        --ok: #3ddc84;        /* for normal operations */
+        --mono: 'IBM Plex Mono', monospace;     /* font */
+        --sans: 'IBM Plex Sans', sans-serif;    /* font */
+    }
+    *{ box-sizing:border-box; }         /* forces browser to keep box at 100px (includes padding within the box) */
+    html, body{                         
+        margin:0; padding:0; height:100%;   /* removes default white margin gap, forces body to stretch to full height of screen */
+        background:                         /* builds resizable background grid pattern */
+            linear-gradient(var(--bg-grid) 1px, transparent 1px) 0 0/100% 28px,         /* creates horizontal lines */
+            linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px) 0/28px 100%,    /* creates vertical lines */
+            var(--bg);      /* background color underneath layers of lines */
+        color:var(--text);  /* global color applied to whole page */
+        font-family:var(--sans);    /* global font applied to whole page */
+    }
+    .wrap{ max-width:1320px; margin:0 auto; padding:20px 24px 60px; }       /* defines class to hold main content of website 
+        (max width, centers info, adds padding on all sides) */
+
+    /* aligns stuff inside header horizontally nicely, pushes team name/brand/logo to far left, status indicator on far right  */
+    header{
+        display:flex; align-items:center; justify-content:space-between;    
+        padding:16px 20px; margin-bottom:18px;  
+        background:var(--panel);
+        border:1px solid var(--line);
+        border-radius:4px;
+        position:relative; overflow:hidden;
+    }
+
+    /* draws faint white lines at 100 deg in header container */
+    header::before{
+        content:""; position:absolute; inset:0;
+        background:repeating-linear-gradient(100deg, transparent, transparent 38px, rgba(255,255,255,0.015) 38px, 
+            rgba(255,255,255,0.015) 39px);
+        pointer-events:none;
+    }
+
+    .brand{ display:flex; align-items:center; gap:14px; }
+    
+    /* creates circular status light */
+    .brand-mark{
+        width:38px; height:28px; border-radius:50%;    
+        background: radial-gradient(circle at 35% 30%, #2a323a, #0c0e10 70%);
+        border:1px solid var(--line);
+        position:relative; flex-shrink:0;
+    }
+
+    /* small dot inside sphere glowing green if normal state */
+    .brand-mark::after{
+        content:""; position:absolute; inset:11px;
+        border-radius:50%; background:var(--ok);
+        box-shadow:0 0 8px var(--ok);
+    }
+
+    /* if in warning class, dot turns red */
+    .brand-mark.warn::after{ background:var(--danger); box-shadow:0 0 10px var(--danger); }
+    
+    /* main title (h1) and subtext (p) forced into uppercase, spaced out, and stylized text */
+    .brand h1{
+        font-family:var(--mono); font-size:15px; font-weight:600; letter-spacing:0.08em;
+        margin:0; text-transform:uppercase; color:var(--text);
+    }
+    .brand p{ margin:2px 0 0; font-size:11px; color:var(--text-faint); font-family:var(--mono); letter-spacing:0.04em; }
+    
+    /* status badge to right of the header */
+    .status-pill{
+        font-family:var(--mono); font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+        padding:6px 14px; border-radius:3px; border:1px solid var(--line);
+        color:var(--ok); background:rgba(61,220,132,0.07);
+    }
+    /* if warning triggers, box begins pulsating (faint -> visible) to grab attention */
+    .status-pill.warn{ color:var(--danger); background:rgba(255,77,77,0.09); border-color:rgba(255,77,77,0.4); 
+        animation:pulseborder 1.4s infinite; }
+    @keyframes pulseborder{ 0%,100%{border-color:rgba(255,77,77,0.4);} 50%{border-color:rgba(255,77,77,0.9);} }
+    
+    /* notification box sitting below header */
+    #warningBanner{
+        display:none;
+        align-items:center; gap:12px;
+        background:linear-gradient(90deg, rgba(255,77,77,0.16), rgba(255,77,77,0.05));
+        border:1px solid var(--danger);
+        border-left:4px solid var(--danger);
+        border-radius:4px;
+        padding:12px 16px; margin-bottom:16px;
+        font-family:var(--mono); font-size:13px;
+        animation:slidein 0.25s ease;
+    }
+
+    /* banner slides in nicely onto page, not abrupt */
+    @keyframes slidein{ from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:translateY(0);} }
+    #warningBanner .icon{ font-size:20px; }
+    #warningBanner .msg{ flex:1; color:var(--text); }
+    #warningBanner .msg b{ color:var(--danger); }
+
+    /* horizontal bar with three cols holding input fields where user uploads files */
+    .intake{
+        display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:18px; 
+    }
+    .field{
+        background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:12px 14px;
+    }
+    .field label{
+        display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:0.08em;
+        text-transform:uppercase; color:var(--text-faint); margin-bottom:8px;
+    }
+    input[type=file], select{
+        width:100%; background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+        padding:8px 10px; border-radius:3px; font-family:var(--sans); font-size:12.5px;
+    }
+    select{ font-family:var(--mono); }
+    .hint{ font-size:10.5px; color:var(--text-faint); margin-top:6px; line-height:1.5; }
+    .hint code{ color:var(--hum); }
+
+    /* splits screen into wide left column and narrower right column */
+    .grid{ display:grid; grid-template-columns:1.15fr 1fr; gap:16px; align-items:start; }
+    @media (max-width:980px){ .grid{ grid-template-columns:1fr; } }     /* if screen < 980px wide, split cols 
+        collapse and stack vertically */
+    .panel{ background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:16px; }
+    .panel h2{
+        font-family:var(--mono); font-size:11px; letter-spacing:0.1em; text-transform:uppercase; 
+        color:var(--text-dim); margin:0 0 12px; padding-bottom:10px; border-bottom:1px solid var(--line);
+    }
+
+    /* HTML5 video player embedded in panel with playback speed buttons */
+    video{ width:100%; border-radius:3px; background:#000; display:block; }
+    .speed-row{ display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+    .speed-btn{
+        font-family:var(--mono); font-size:11.tpx; padding:6px 12px;
+        background:var(--panel-2); border:1px solid var(--line); color:var(--text-dim);
+        border-radius:3px; cursor:pointer;
+    }
+    .speed-btn:hover{ color:var(--text); border-color:var(--hum-dim); }
+    .speed-btn.active{ color:#0c0e10; background:var(--hum); border-color:var(--hum); font-weight:600; }
+
+    /* grid of 4 rectangular boxes show changing data values */
+    .readout-row{
+        display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:14px; 
+    }
+    .readout{
+        background:var(--panel-2); border:1px solid var(--line); border-radius:3px;
+        padding:9px 10px;
+    }
+
+    .readout .rlabel{ font-family:var(--mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase; 
+        letter-spacing:0.06em; }
+    .readout .rvalue{ font-family:var(--mono); font-size:17px; font-weight:600; margin-top:3px; }
+    .readout .rvalue.temp{ color:var(--temp); }
+    .readout .rvalue.hum{ color:var(--hum); }
+    .readout .rvalue.danger{ color:var(--danger); }
+
+    /* locks height of graph */
+  canvas#chart{ max-height:340px; }
+    .legend-row{ display:flex; gap:16px; margin-top:10px; font-family:var(--mono); font-size:10.5px; color:var(--text-dim); 
+        flex-wrap:wrap; }
+    .legend-row span{ display:inline-flex; align-items:center; gap:6px; }
+    .legend-row i{ width:10px; height:10px; border-radius:2px; display:inline-block; }
+
+    /* data log (chronological) of system warnings with max height, adds scrollbar internally if lots of alerts */
+    .flag-list{ margin-top:14px; max-height:150px; overflow-y:auto; border-top:1px solid var(--line); padding-top:10px; }
+    .flag-list .empty{ color:var(--text-faint); font-family:var(--mono); font-size:11px; }
+    .flag-row{
+        display:flex; justify-content:space-between; font-family:var(--mono); font-size:11px;
+        padding:5px 0; border-bottom:1px solid rgba(255,255,255,0.03); color:var(--text-dim);
+    }
+    .flag-row b{ color:var(--danger); }
+
+    /* centered copyright message */
+    footer{ margin-top:22px; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); text-align:center; }
+</style>
+</head>
+
+<!-- HTML structural skeleton connecting libraries, fonts, and layout styling so far -->
+<body>
+<div class="wrap">
+
+    <!-- page header (title) -->
+    <header>
+        <div class="brand">
+            <div class="brand mark" id="brandMark"></div>
+            <div>
+                <h1>Tunnel Rover Dashboard</h1>
+                <p>Rice Tunnel Vision: Video and Sensor Log Viewer</p>
+            </div>
+        </div>
+        <div class="status-pill" id="statusPill">STATUS: NOMINAL</div>  <!-- warning status when normal -->
+    </header>
+
+    <!-- warning system: if problem, error runs and banner pops up -->
+    <div id="warningBanner">
+        <span class="icon">⚠</span>
+        <div class="msg" id="warningMsg"></div>
+    </div>
+
+    <!-- sets up three boxes to take files from SD card -->
+    <div class="intake">
+        <div class="field">
+            <label>log.csv (from SD card)</label>   <!-- takes csv -->
+            <input type="file" id="csvInput" accept=".csv">
+            <div class="hint">Loads the <code>timestamp, temperature_F, humidity_pct, active_camera, video_file</code> 
+                rows written by the logging script.</div>
+        </div>
+        <div class="field">
+            <label>video segment (.mp4 recommended)</label>     <!-- takes video footage -->
+            <input type="file" id="videoInput" accept="video/*">
+            <div class="hint">Browsers can't play raw <code>.h264</code> directly. Convert first: <code>
+                ffmpeg -i cam1_..._....h264 -c cam1_..._....mp4</code></div>    <!-- reminder to convert pi files to mp4 -->
+        </div>
+        <div class="field">
+            <label>matching video_file in log</label>
+            <select id="videoFileSelect"><option value="">-- load CSV first --</option></select>
+            <div class="hint">Tells the dashboard which CSV rows correspond to the loaded video so the graph can sync 
+                to playback time.</div>     <!-- lets user choose which video clip they just uploaded so data sync perfectly 
+                    with the video -->
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <!-- left panel -->
+        <div class="panel">
+            <h2>Camera Feed</h2>
+            <video id="player" controls></video>      <!-- video player displays what rover recorded -->
+            <div class="speed-row" id="speedRow">     <!-- HTML buttons pre-loaded with dataset modifiers allowing users 
+                to fast-forward through footage or slow down -->
+                <button class="speed-btn" data-speed="0.25">0.25×</button>
+                <button class="speed-btn" data-speed="0.5">0.5×</button>
+                <button class="speed-btn active" data-speed="1">1×</button>
+                <button class="speed-btn" data-speed="1.5">1.5×</button>
+                <button class="speed-btn" data-speed="2">2×</button>
+                <button class="speed-btn" data-speed="4">4×</button>
+            </div>
+            <div class="readout-row">       <!-- dashboard meters displaying real time data updating second by second 
+                as video plays -->
+                <div class="readout"><div class="rlabel">Elapsed</div><div class="rvalue" id="rElapsed">--</div></div>
+                <div class="readout"><div class="rlabel">Temp (°F)</div><div class="rvalue temp" id="rTemp">--</div></div>
+                <div class="readout"><div class="rlabel">Humidity (%)</div><div class="rvalue hum" id="rHum">--</div></div>
+                <div class="readout"><div class="rlabel">Camera</div><div class="rvalue" id="rCam">--</div></div>
+            </div>
+        </div>
+
+        <!-- right panel -->
+        <div class="panel">
+            <h2>Temperature &amp; Humidity Log</h2>
+            <canvas id="chart" height="180"></canvas>   <!-- drawing live line graph -->
+            <div class="legend-row">                    <!-- explains colors on graph (legend) and shows built-in 
+                thresholds (130F, 80% RH)-->
+                <span><i style="background:var(--temp)"></i>Temperature °F</span>
+                <span><i style="background:var(--hum)"></i>Humidity %</span>
+                <span><i style="background:var(--danger); opacity:0.6"></i>Threshold (130°F / 80%)</span>
+            </div>
+            <div class="flag-list" id="flagList"><div class="empty">No threshold events yet -- load a CSV to scan the log.</div></div>      <!-- as processes data, will fill this box with timestamps every time rover encounters dangerous levels -->
+        </div>
+    </div>
+
+    <!-- security note (app reads everything locally with JavaScript rather than uploading files to cloud): dash 
+        loads instantly, works offline -->
+    <footer>Runs entirely in-browser. Nothing is uploaded anywhere -- files are read locally from your machine.</footer>
+</div>
+
+<script>
+
+// **** INITIALIZATION ****
+const TEMP_LIMIT = 130;     // max temp, higher indicates issues
+const HUM_LIMIT = 80;       // max RH level, higher indicates issues
+
+let rows = [];              // all parsed csv rows
+let activeRows = [];        // rows matched to currently loaded video with elapsed seconds
+let chart = null;           // for chart.js eventually
+let currentElapsedX = null; // playhead position drawn on chart
+
+const csvInput = document.getElementById('csvInput');       // connects to file upload button for csv
+const videoInput = document.getElementById('videoInput');   // connects to file upload button for mp4
+const videoFileSelect = document.getElementById('videoFileSelect');     // connects to dropdown menu element, automatically populates with video names from csv
+const player = document.getElementById('player');           // connects to video display screen, controls playback speed, tracks current playtime position
+const warningBanner = document.getElementById('warningBanner');        // connects to hidden horiz notification banner, toggles its visibility depending on status
+const warningMsg = document.getElementById('warningMsg');   // connects to empty text box inside banner, automatically types out explicit hazard warning text
+const statusPill = document.getElementById('statusPill');   // connects to status badge in header, changes text status value to warning or back to normal
+const brandMark = document.getElementById('brandMark');     // connects to circular logo graphic, toggles active classes to flip logo light 
+const flagList = document.getElementById('flagList');       // connects to scrolling log window on right side, injects generated HTML lines detailing limit failures
+
+
+// ********* HELPER FUNCTIONS ***********
+
+// parses the script's "%Y%m%d_%H%M%S" timestamp string into a date
+function parseLogTimestamp(ts){
+    if(!ts || ts.length < 15) return null;
+    const y = +ts.slice(0,4), mo = +ts.slice(4,6), d = +ts.slice(6,8); 
+    const h = +ts.slice(9,11), mi = +ts.slice(11,13), s = +ts.slice(13,15);
+    return new Date(y, mo-1, d, h, mi, s);
+}
+
+// pulls embedded "YYYYMMDD_HHMMSS" out of a video filename (eg. cam1_20260706)143205.h264
+function parseTimestampFromFilename(name){
+    const m = name && name.match(/(\d{8}_\d{6})/);
+    return m ? parseLogTimestamp(m[1]) : null;
+}
+
+// takes raw count of seconds and turns into video timestamp clock layout
+function fmtElapsed(sec){
+    if(sec == null || isNaN(sec)) return '--';
+    const m = Math.floor(sec/60), s = Math.floor(sec%60);
+    return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+// ********** CSV LOAD ***********
+// watches CSV input slot on webpage. when user selects file, drops into PapaParse library processor to deconstruct csv matrix
+csvInput.addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    Papa.parse(file, {
+        header:true,        // treats first row of spreadsheet as label definitions
+        dynamicTyping:true, // automatically shifts textual digits into true float/decimal numbers
+        skipEmptyLines:true,
+        complete: results=> {
+            rows = results.data
+                .filter(r => r.timestamp)   // discards corrupted or empty spreadsheet lines
+                .map(r => ({...r, tsDate: parseLogTimestamp(String(r.timestamp))}))    // duplicates each spreadsheet row item with new parameter tsDate holding real JavaScript date object gen by first utility function
+                .filter(r => r.tsDate);
+            
+            const videoFiles = [...new Set(rows.map(r => r.video_file).filter(Boolean))];   // grabs clean list of every unique video recording filename
+            videoFileSelect.innerHTML = videoFiles.length
+                ? videoFiles.map(v => `<option value = "${v}">${v}</option>`).join('')      // translates list into dropdown elements
+                : '<option value="">(no video_file entries found)</option>';
+
+            renderFlagList();   // fills right hand warning log panel 
+            buildChart([]); // empty chart until a video segment is matched
+        }
+    });
+});
+
+// ******** VIDEO LOAD *********
+// watches video upload slot on webpage
+videoInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(!file) return;
+    player.src = URL.createObjectURL(file);     // creates temporary local streaming link inside computer's RAM and assigns local link to player element allowing it to instantly play. this is instead of uploading massive video file to server
+
+    // try to auto-select matching CSV entry by filename base (ignoring extension)
+    const base = file.name.replace(/\.[^.]+$/, '');
+    const match = [...videoFileSelect.options].find(o => o.value.replace(/\.[^.]+$/,'') === base);
+    if (match) videoFileSelect.value = match.value;
+    syncActiveRows();
+});
+
+videoFileSelect.addEventListener('change', syncActiveRows);
+
+// used whenever video is auto-matched or when selection dropdown menu manually changed
+function syncActiveRows(){
+    const selected = videoFileSelect.value;
+    if(!selected){ activeRows = []; buildChart([]); return; }
+
+    const videoStart = parseTimestampFromFilename(selected);    // grabs filename string and extracts timestamp
+    activeRows = rows   
+        .filter(r => r.video_file === selected)     // filters out data keeping only video_file row matching clip that's being watched
+        .map(r => ({...r, elapsed: videoStart ? (r.tsDate - videoStart) / 1000 : null}))    
+        .filter(r => r.elapsed != null)     
+        .sort((a, b) => a.elapsed - b.elapsed);     // reorganizes data chronologically from start of video to end
+
+    buildChart(activeRows);     // sends timestamped, isolated rows to draw synchronized visual lines
+}
+
+// ******** CHART **********
+// creates custom rendering rule for chart.js
+const playheadPlugin = {
+    id:'playhead',
+    afterDraw(c){   // when chart.js finishes drawing background lines and data points, automatically triggered
+        if(currentElapsedX == null) return;
+        const xScale = c.scales.x;
+        const px = xScale.getPixelForValue(currentElapsedX);    // looks up current playback second to figure out which pixel on monitor screen it matches
+        if(px < xScale.left || px > xScale.right) return;
+        const {top,bottom} = c.chartArea;
+        const ctx = c.ctx;
+        ctx.save();
+        ctx.strokeStyle = '#e7ecef';
+        ctx.setLineDash([3,3]);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(px, top);
+        ctx.lineTo(px, bottom);
+        ctx.stroke();
+        ctx.restore();
+    }
+};
+
+// function builds dual-axis chart
+function buildChart(data){
+    const ctx = document.getElementById('chart').getContext('2d');
+    const labels = data.map(r => r.elapsed);
+
+    if(chart) chart.destroy();  // if chart already drawn on screen from older video file, forcefully removes it to prevent overlapping
+    chart = new Chart(ctx, {
+        type:'line',
+        data:{
+            labels,
+            datasets:[      // structures temp on left axis and hum on right axis so can scale side by side despite difference in units
+                {
+                    label:'Temp °F', yAxisID:'y', data:data.map(r=>r.temperature_F),
+                    borderColor:'#ef8354', backgroundColor:'#ef8354', pointRadius:2, tension:0.25,
+                    segment:{ borderColor: ctx2 => (ctx2.p1.parsed.y > TEMP_LIMIT ? '#ff4d4d' : '#ef8354') }
+                },
+                {
+                    label:'Humidity %', yAxisID:'y1', data:data.map(r=>r.humidity_pct),
+                    borderColor:'#4fb6c2', backgroundColor:'#4fb6c2', pointRadius:2, tension:0.25,
+                    segment:{ borderColor: ctx2 => (ctx2.p1.parsed.y > HUM_LIMIT ? '#ff4d4d' : '#4fb6c2') }
+                },
+                {
+                    label:'Temp limit', yAxisID:'y', data:data.map(()=>TEMP_LIMIT),
+                    borderColor:'rgba(255,77,77,0.55)', borderDash:[5,4], pointRadius:0, borderWidth:1
+                },
+                {
+                    label:'Humidity limit', yAxisID:'y1', data:data.map(()=>HUM_LIMIT),
+                    borderColor:'rgba(255,77,77,0.3)', borderDash:[5,4], pointRadius:0, borderWidth:1
+                }
+            ]
+        },
+        options:{
+            responsive:true,
+            animation:false,
+            interaction:{ mode:'index', intersect:false },
+            plugins:{ legend:{ display:false } },
+            scales:{
+                x:{ type:'linear', title:{ display:true, text:'Elapsed (s)', color:'#8a95a1' },
+                    grid:{ color:'#2a3138' }, ticks:{ color:'#8a95a1', font:{family:'IBM Plex Mono', size:10} } },
+                y:{ position:'left', title:{ display:true, text:'°F', color:'#ef8354' },
+                    grid:{ color:'#2a3138' }, ticks:{ color:'#ef8354', font:{family:'IBM Plex Mono', size:10} } },
+                y1:{ position:'right', title:{ display:true, text:'% RH', color:'#4fb6c2' },
+                    grid:{ display:false }, ticks:{ color:'#4fb6c2', font:{family:'IBM Plex Mono', size:10} } }
+            }
+        },
+        plugins:[playheadPlugin]
+    });
+}
+
+// flags rows of entire log that pass threshold and wraps into .map() and injects into #flagList as scrolling rows
+function renderFlagList() {
+    const flagged = rows.filter(r => r.temperature_F > TEMP_LIMIT || r.humidity_pct > HUM_LIMIT);
+    if(!flagged.length){
+        flagList.innerHTML = '<div class="empty">No threshold events in this log.</div>';
+        return;
+    }
+    flagList.innerHTML = flagged.map(r => `
+        <div class="flag-row">
+            <span>${r.timestamp} · cam${r.active_camera ?? '--'}</span>
+            <span><b>${r.temperature_F}°F</b> / <b>${r.humidity_pct}%</b></span>
+        </div>`).join('');
+}
+
+// playback sync
+const speedRow = document.getElementById('speedRow');
+speedRow.addEventListener('click', e => {
+    const btn = e.target.closest('.speed-btn');
+    if(!btn) return;
+    player.playbackRate = parseFloat(btn.dataset.speed);      
+    [...speedRow.children].forEach(b => b.classList.toggle('active', b === btn));
+});
+
+player.addEventListener('timeupdate', () => {
+    if(!activeRows.length) return;
+    const t = player.currentTime;
+    currentElapsedX = t;
+
+    // nearest logged reading to current playback position
+    let nearest = activeRows[0], bestDiff = Infinity;
+    for(const r of activeRows){
+        const diff = Math.abs(r.elapsed - t);
+        if(diff < bestDiff){ bestDiff = diff; nearest = r; }
+    }
+
+    document.getElementById('rElapsed').textContent = fmtElapsed(t);
+    document.getElementById('rCam').textContent = nearest.active_camera ?? '--';
+
+    const tempEl = document.getElementById('rTemp');
+    const humEl = document.getElementById('rHum');
+    tempEl.textContent = nearest.temperature_F != null ? nearest.temperature_F : '--';
+    humEl.textContent = nearest.humidity_pct != null ? nearest.humidity_pct : '--';
+
+    const tempBad = nearest.temperature_F != null && nearest.temperature_F > TEMP_LIMIT;
+    const humBad = nearest.humidity_pct != null && nearest.humidity_pct > HUM_LIMIT;
+    tempEl.classList.toggle('danger', tempBad);
+    humEl.classList.toggle('danger', humBad);
+
+    setWarning(tempBad, humBad, nearest);
+
+    if(chart){ chart.update('none'); }
+});
+
+// controls operating state of dash
+function setWarning(tempBad, humBad, row){
+    if(tempBad || humBad){
+        statusPill.textContent = 'STATUS: WARNING';
+        statusPill.classList.add('warn');
+        brandMark.classList.add('warn');
+        warningBanner.style.display = 'flex';
+        const parts = [];
+        if(tempBad) parts.push(`temperature <b>${row.temperature_F}°F</b> exceeds ${TEMP_LIMIT}°F`);
+        if(humBad) parts.push(`humidity <b>${row.humidity_pct}%</b> exceeds ${HUM_LIMIT}%`);
+        warningMsg.innerHTML = `Threshold exceeded at ${row.timestamp}: ${parts.join(' and ')}.`;
+    } else {
+        statusPill.textContent = 'STATUS: NOMINAL';
+        statusPill.classList.remove('warn');
+        brandMark.classList.remove('warn');
+        warningBanner.style.display = 'none';
+    }
+}
+
+buildChart([]);
+</script>
+</body>
+</html>
