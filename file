@@ -9,22 +9,22 @@ import adafruit_dht
 
 # ---- Settings ----
 DATA_FOLDER = "readings"                      # folder where CSV files are stored
-CSV_FILENAME = os.path.join(DATA_FOLDER, "dht22_readings.csv")
 READ_INTERVAL_SECONDS = 2                      # DHT22 needs at least 2 seconds between reads
 
 # Create the data folder if it doesn't exist
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
+# Generate a unique filename for this run, e.g. readings/dht22_2026-07-10_14-32-05.csv
+run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+CSV_FILENAME = os.path.join(DATA_FOLDER, f"dht22_{run_timestamp}.csv")
+
 # Initialize the sensor on GPIO4 (physical pin 7)
 dht = adafruit_dht.DHT22(board.D4)
 
-# Create the CSV file with a header row if it doesn't already exist
-file_exists = os.path.isfile(CSV_FILENAME)
-
-if not file_exists:
-    with open(CSV_FILENAME, mode="w", newline="") as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(["Timestamp", "Temperature_C", "Temperature_F", "Humidity_%"])
+# Create this run's CSV file with a header row
+with open(CSV_FILENAME, mode="w", newline="") as csv_file:
+    writer = csv.writer(csv_file)
+    writer.writerow(["Timestamp", "Temperature_C", "Temperature_F", "Humidity_%"])
 
 
 def push_to_github():
