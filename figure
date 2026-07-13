@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""
+Plot a DHT22 + Pi CPU temperature log from an existing CSV
+(the one produced by dht22_monitor.py).
+
+Usage:
+    python3 plot_dht22_log.py                     # uses dht22_log.csv
+    python3 plot_dht22_log.py --csv mylog.csv
+"""
+
+import argparse
+import csv
+import os
+
+import matplotlib.pyplot as plt
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot an existing DHT22 log CSV")
+    parser.add_argument("--csv", type=str, default="dht22_log.csv", help="CSV file to read (default: dht22_log.csv)")
+    args = parser.parse_args()
+
+    elapsed, dht_temp, humidity, cpu_temp = [], [], [], []
+
+    with open(args.csv, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                elapsed.append(float(row["elapsed_s"]))
+            except (ValueError, KeyError):
+                continue
+            dht_temp.append(float(row["dht_temp_c"]) if row.get("dht_temp_c") not in (None, "", "None") else None)
+            humidity.append(float(row["humidity_pct"]) if row.get("humidity_pct") not in (None, "", "None") else None)
+            cpu_temp.append(float(row["cpu_temp_c"]) if row.get("cpu_temp_c") not in (None, "", "None") else None)
+
+    # Filter out None values per series so the line doesn't break
+    def clean(xs, ys):
+        pairs = [(x, y) for x, y in zip(xs, ys) if y is not None]
+        return [p[0] for p in pairs], [p[1] for p in pairs]
+
+    dht_x, dht_y = clean(elapsed, dht_temp)
+    cpu_x, cpu_y = clean(elapsed, cpu_temp)
+
+    fig, ax1 = plt.subplots()
+    ax1.plot(dht_x, dht_y, color="tab:blue", marker="o", markersize=2, label="DHT22 Temp (°C)")
+    ax1.plot(cpu_x, cpu_y, color="tab:red", marker="o", markersize=2, label="Pi CPU Temp (°C)")
+    ax1.set_xlabel("Elapsed time (s)")
+    ax1.set_ylabel("Temperature (°C)")
+    ax1.legend()
+    ax1.grid(True)
+    plt.title("DHT22 vs Pi CPU Temperature Over Time")
+    plt.tight_layout()
+
+    plot_path = os.path.splitext(args.csv)[0] + ".png"
+    plt.savefig(plot_path)
+    print(f"Plot saved to {plot_path}")
+
+
+if __name__ == "__main__":
+    main()
