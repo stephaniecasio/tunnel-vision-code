@@ -1,136 +1,197 @@
 #!/usr/bin/env python3
 """
-DHT22 + Raspberry Pi CPU temperature monitor.
+Raspberry Pi enclosure thermal test.
 
-Logs the DHT22's temperature/humidity readings alongside the Pi's own CPU
-temperature, so you can see how the sensor reading behaves while the Pi
-(and the sensor itself) are in use over a fixed duration.
+Logs:
+- Raspberry Pi CPU temperature
+- DHT22 temperature
+- DHT22 humidity
 
-Setup (one-time):
-    sudo pip3 install adafruit-circuitpython-dht --break-system-packages
-    sudo apt install libgpiod2 -y
+Stops when CPU reaches 55°C or after test duration.
 
-Wiring (default GPIO4 / physical pin 7):
-    DHT22 VCC  -> 3.3V or 5V
-    DHT22 DATA -> GPIO4
-    DHT22 GND  -> GND
-    (10k pull-up resistor between VCC and DATA if your breakout doesn't have one)
-
-Usage:
-    python3 dht22_monitor.py                      # 5 min, sample every 2s
-    python3 dht22_monitor.py --duration 300 --interval 2
-    python3 dht22_monitor.py --pin D4 --plot
+Run this while your normal rover software is running.
 """
 
-import argparse
 import csv
-import subprocess
 import time
+import subprocess
 from datetime import datetime
 
 import board
 import adafruit_dht
 
 
+# -----------------------------
+# Settings
+# -----------------------------
+
+LOG_FILE = "rover_thermal_test.csv"
+
+TEST_DURATION = 1800     # seconds (30 minutes)
+INTERVAL = 2             # seconds between samples
+
+MAX_CPU_TEMP = 55.0      # stop test at this CPU temperature
+
+
+# -----------------------------
+# DHT22 setup
+# -----------------------------
+
+dht = adafruit_dht.DHT22(
+    board.D4,
+    use_pulseio=False
+)
+
+
+# -----------------------------
+# CPU temperature function
+# -----------------------------
+
 def read_cpu_temp_c():
-    """Read Pi's own CPU temperature in Celsius."""
+    """Read Raspberry Pi CPU temperature."""
+
     try:
-        out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
-        return float(out.split("=")[1].split("'")[0])
+        output = subprocess.check_output(
+            ["vcgencmd", "measure_temp"],
+            text=True
+        )
+
+        return float(
+            output.split("=")[1].split("'")[0]
+        )
+
     except Exception:
+
         try:
-            with open("/sys/class/thermal/thermal_zone0/temp") as f:
-                return int(f.read().strip()) / 1000.0
+            with open(
+                "/sys/class/thermal/thermal_zone0/temp"
+            ) as f:
+                return int(f.read()) / 1000.0
+
         except Exception:
             return None
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Monitor DHT22 + Pi CPU temperature over time")
-    parser.add_argument("--pin", type=str, default="D4", help="GPIO pin the DHT22 data line is on (default: D4)")
-    parser.add_argument("--interval", type=float, default=2.0, help="Seconds between samples (default: 2)")
-    parser.add_argument("--duration", type=float, default=300.0, help="Total seconds to run (default: 300 = 5 min)")
-    parser.add_argument("--csv", type=str, default="dht22_log.csv", help="Output CSV filename")
-    parser.add_argument("--plot", action="store_true", help="Show/save a plot when done")
-    args = parser.parse_args()
 
-    pin = getattr(board, args.pin)
-    dht = adafruit_dht.DHT22(pin, use_pulseio=False)
+# -----------------------------
+# Main logging loop
+# -----------------------------
 
-    start = time.time()
-    rows = []
+start = time.time()
 
-    print(f"Logging for {args.duration:.0f}s (every {args.interval}s) to {args.csv}. Ctrl+C to stop early.\n")
-    print(f"{'Time':>10} | {'Elapsed(s)':>10} | {'DHT Temp(C)':>11} | {'Humidity(%)':>11} | {'CPU Temp(C)':>11}")
-    print("-" * 65)
+print("Starting rover thermal test")
+print(f"Stop temperature: {MAX_CPU_TEMP}°C")
+print(f"Maximum duration: {TEST_DURATION/60:.1f} minutes\n")
 
-    try:
-        with open(args.csv, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["timestamp", "elapsed_s", "dht_temp_c", "humidity_pct", "cpu_temp_c"])
 
-            while True:
-                elapsed = time.time() - start
-                if elapsed > args.duration:
-                    break
+try:
+
+    with open(LOG_FILE, "w", newline="") as file:
+
+        writer = csv.writer(file)
+
+        writer.writerow([
+            "timestamp",
+            "elapsed_s",
+            "cpu_temp_c",
+            "dht_temp_c",
+            "humidity_pct"
+        ])
+
+
+        while True:
+
+            elapsed = time.time() - start
+
+
+            # Stop after time limit
+            if elapsed >= TEST_DURATION:
+                print("\nMaximum test duration reached.")
+                break
+
+
+            # Read CPU temperature
+            cpu_temp = read_cpu_temp_c()
+
+
+            # Stop if CPU gets too hot
+            if (
+                cpu_temp is not None
+                and cpu_temp >= MAX_CPU_TEMP
+            ):
+
+                print(
+                    f"\nCPU reached "
+                    f"{cpu_temp:.1f}°C."
+                )
+
+                print(
+                    "Stopping thermal test."
+                )
+
+                break
+
+
+
+            # Read DHT22
+            try:
+
+                dht_temp = dht.temperature
+                humidity = dht.humidity
+
+            except RuntimeError:
 
                 dht_temp = None
                 humidity = None
-                try:
-                    dht_temp = dht.temperature
-                    humidity = dht.humidity
-                except RuntimeError as e:
-                    # DHT sensors regularly fail to read — this is normal, just retry next loop
-                    print(f"  (sensor read skipped: {e})")
-
-                cpu_temp = read_cpu_temp_c()
-                now_str = datetime.now().strftime("%H:%M:%S")
-
-                writer.writerow([now_str, round(elapsed, 1), dht_temp, humidity, cpu_temp])
-                f.flush()
-
-                dht_str = f"{dht_temp:.1f}" if dht_temp is not None else "N/A"
-                hum_str = f"{humidity:.1f}" if humidity is not None else "N/A"
-                cpu_str = f"{cpu_temp:.1f}" if cpu_temp is not None else "N/A"
-                print(f"{now_str:>10} | {elapsed:>10.1f} | {dht_str:>11} | {hum_str:>11} | {cpu_str:>11}")
-
-                rows.append((elapsed, dht_temp, humidity, cpu_temp))
-                time.sleep(args.interval)
-
-    except KeyboardInterrupt:
-        print("\nStopped by user.")
-    finally:
-        try:
-            dht.exit()
-        except Exception:
-            pass
-
-    print(f"\nSaved {len(rows)} samples to {args.csv}")
-
-    if args.plot and rows:
-        try:
-            import matplotlib.pyplot as plt
-            xs = [r[0] for r in rows]
-            dht_ys = [r[1] for r in rows]
-            cpu_ys = [r[3] for r in rows]
-
-            fig, ax1 = plt.subplots()
-            ax1.plot(xs, dht_ys, color="tab:blue", marker="o", markersize=2, label="DHT22 Temp (°C)")
-            ax1.plot(xs, cpu_ys, color="tab:red", marker="o", markersize=2, label="Pi CPU Temp (°C)")
-            ax1.set_xlabel("Elapsed time (s)")
-            ax1.set_ylabel("Temperature (°C)")
-            ax1.legend()
-            ax1.grid(True)
-            plt.title("DHT22 vs Pi CPU Temperature Over 5 Minutes")
-            plt.tight_layout()
-
-            import os
-            plot_path = os.path.splitext(args.csv)[0] + ".png"
-            plt.savefig(plot_path)
-            print(f"Plot saved to {plot_path}")
-        except ImportError:
-            print("matplotlib not installed — run 'pip3 install matplotlib' to enable --plot")
 
 
-if __name__ == "__main__":
-    main()
+
+            timestamp = datetime.now().strftime(
+                "%H:%M:%S"
+            )
+
+
+            # Save data
+            writer.writerow([
+                timestamp,
+                round(elapsed, 1),
+                cpu_temp,
+                dht_temp,
+                humidity
+            ])
+
+            file.flush()
+
+
+
+            print(
+                f"{timestamp} | "
+                f"CPU: {cpu_temp:.1f}°C | "
+                f"DHT22: {dht_temp}°C | "
+                f"Humidity: {humidity}%"
+            )
+
+
+            time.sleep(INTERVAL)
+
+
+
+except KeyboardInterrupt:
+
+    print("\nStopped manually.")
+
+
+
+finally:
+
+    try:
+        dht.exit()
+
+    except Exception:
+        pass
+
+
+
+print(
+    f"\nSaved data to {LOG_FILE}"
+)
