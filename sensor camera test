@@ -28,7 +28,7 @@ import cv2
 import board
 import adafruit_dht
 
-from picamera2 import Picamera2, MappedArray
+from picamera2 import Picamera2, MappedArray, Preview
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
 
@@ -129,6 +129,8 @@ def main():
                          help="Output video filename (default: recording.mp4)")
     parser.add_argument("--log", type=str, default="sensor_log.csv",
                          help="Sensor CSV log filename (default: sensor_log.csv)")
+    parser.add_argument("--preview", action="store_true",
+                         help="Show a live preview window on the attached monitor while recording")
     args = parser.parse_args()
 
     print("Starting sensor reader...")
@@ -145,6 +147,12 @@ def main():
     )
     picam2.configure(video_config)
     picam2.pre_callback = make_overlay_callback(sensor_reader)
+
+    if args.preview:
+        # DRM preview draws directly to the attached monitor without needing
+        # a desktop/X session -- works well on lower-powered boards like a Pi 3.
+        # If you're running the full desktop GUI and DRM fails, try Preview.QTGL instead.
+        picam2.start_preview(Preview.DRM)
 
     encoder = H264Encoder(bitrate=10_000_000)
     output = FfmpegOutput(args.output)
