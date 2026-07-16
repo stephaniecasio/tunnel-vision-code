@@ -28,7 +28,7 @@ import cv2
 import board
 import adafruit_dht
 
-from picamera2 import Picamera2
+from picamera2 import Picamera2, MappedArray
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
 
@@ -109,7 +109,8 @@ def make_overlay_callback(sensor_reader):
     def overlay(request):
         text = sensor_reader.get_overlay_text()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with request.make_array("main") as frame:
+        with MappedArray(request, "main") as m:
+            frame = m.array
             # Semi-transparent bar behind the text for readability
             cv2.rectangle(frame, (0, 0), (frame.shape[1], 60), (0, 0, 0), -1)
             cv2.putText(frame, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
