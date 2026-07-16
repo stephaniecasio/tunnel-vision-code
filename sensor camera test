@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""
+Record video from the Raspberry Pi camera (IMX219) while overlaying
+live temperature/humidity readings from a DHT22 sensor.
+
+Requirements (install before running):
+    sudo apt update
+    sudo apt install -y python3-picamera2 python3-opencv libgpiod2
+    pip install adafruit-circuitpython-dht --break-system-packages
+
+Wiring:
+    DHT22 data pin -> GPIO4 (physical pin 7) by default.
+    Change DHT_PIN below if you wired it elsewhere.
+    Don't forget: DHT22 needs a pull-up resistor (~10k) between
+    data and VCC if your breakout board doesn't already include one.
+
+Usage:
+    python3 record_with_dht22.py --duration 30 --output myvideo.mp4
+"""
+
+import argparse
+import time
+import threading
+import csv
+from datetime import datetime
+
+import cv2
+import board
+import adafruit_dht
+
+from picamera2 import Picamera2
+from picamera2.encoders import H264Encoder
+from picamera2.outputs import FfmpegOutput
+
+
+# ---- CONFIG ----
+DHT_PIN = board.D4          # GPIO4 / physical pin 7. Change if wired elsewhere.
+READ_INTERVAL = 2.5         # seconds between DHT22 reads (sensor can't go faster than ~2s reliably)
+VIDEO_WIDTH = 1280
+VIDEO_HEIGHT = 720
+VIDEO_FPS = 30
+
+
+class SensorReader:
+    """Reads the DHT22 in a background thread and keeps the latest values."""
+
+    def __init__(self, pin, interval, log_path):
+        self.dht = adafruit_dht.DHT22(pin, use_pulseio=False)
+        self.interval = interval
+        self.latest_temp_c = None
+        self.latest_humidity = None
+        self.last_read_time = None
+        self._stop = threading.Event()
+        self._log_path = log_path
+        self._log_file = open(log_path, "w", newline="")
+        self._csv = csv.writer(self._log_file)
+        self._csv.writerow(["timestamp", "temperature_c", "temperature_f", "humidity_percent"])
+        self._log_file.flush()
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                temp_c = self.dht.temperature
+                humidity = self.dht.humidity
+                if temp_c is not None and humidity is not None:
+                    self.latest_temp_c = temp_c
+                    self.latest_humidity = humidity
+                    self.last_read_time = datetime.now()
+                    temp_f = temp_c * 9 / 5 + 32
+                    self._csv.writerow([
+                        self.last_read_time.isoformat(timespec="seconds"),
+                        f"{temp_c:.1f}",
+                        f"{temp_f:.1f}",
+                        f"{humidity:.1f}",
+                    ])
+                    self._log_file.flush()
+                    print(f"[{self.last_read_time.strftime('%H:%M:%S')}] "
+                          f"Temp: {temp_c:.1f}C ({temp_f:.1f}F)  Humidity: {humidity:.1f}%")
+            except RuntimeError as e:
+                # DHT sensors regularly throw read errors -- this is normal, just retry.
+                print(f"Sensor read skipped: {e}")
+            except Exception as e:
+                print(f"Unexpected sensor error: {e}")
+            time.sleep(self.interval)
+
+    def get_overlay_text(self):
+        if self.latest_temp_c is None:
+            return "Waiting for sensor reading..."
+        temp_f = self.latest_temp_c * 9 / 5 + 32
+        return f"{self.latest_temp_c:.1f}C / {temp_f:.1f}F   {self.latest_humidity:.1f}% RH"
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=2)
+        self._log_file.close()
+        try:
+            self.dht.exit()
+        except Exception:
+            pass
+
+
+def make_overlay_callback(sensor_reader):
+    """Returns a pre_callback function that draws the sensor text onto each frame."""
+
+    def overlay(request):
+        text = sensor_reader.get_overlay_text()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with request.make_array("main") as frame:
+            # Semi-transparent bar behind the text for readability
+            cv2.rectangle(frame, (0, 0), (frame.shape[1], 60), (0, 0, 0), -1)
+            cv2.putText(frame, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, timestamp, (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (200, 200, 200), 1, cv2.LINE_AA)
+
+    return overlay
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Record video with DHT22 overlay")
+    parser.add_argument("--duration", type=int, default=30,
+                         help="Recording duration in seconds (default: 30)")
+    parser.add_argument("--output", type=str, default="recording.mp4",
+                         help="Output video filename (default: recording.mp4)")
+    parser.add_argument("--log", type=str, default="sensor_log.csv",
+                         help="Sensor CSV log filename (default: sensor_log.csv)")
+    args = parser.parse_args()
+
+    print("Starting sensor reader...")
+    sensor_reader = SensorReader(DHT_PIN, READ_INTERVAL, args.log)
+    sensor_reader.start()
+
+    # Give the sensor a moment to get its first reading before we start overlaying
+    time.sleep(3)
+
+    print("Starting camera...")
+    picam2 = Picamera2()
+    video_config = picam2.create_video_configuration(
+        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"}
+    )
+    picam2.configure(video_config)
+    picam2.pre_callback = make_overlay_callback(sensor_reader)
+
+    encoder = H264Encoder(bitrate=10_000_000)
+    output = FfmpegOutput(args.output)
+
+    picam2.start_recording(encoder, output)
+    print(f"Recording for {args.duration} seconds -> {args.output}")
+    print(f"Sensor readings logging to -> {args.log}")
+
+    try:
+        time.sleep(args.duration)
+    except KeyboardInterrupt:
+        print("Stopped early by user.")
+    finally:
+        picam2.stop_recording()
+        sensor_reader.stop()
+        print("Done.")
+
+
+if __name__ == "__main__":
+    main()
