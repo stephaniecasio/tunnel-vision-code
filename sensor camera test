@@ -41,6 +41,15 @@ VIDEO_HEIGHT = 720
 VIDEO_FPS = 30
 
 
+def get_cpu_temp():
+    """Reads the Pi's CPU temperature in Celsius from the thermal zone file."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            return int(f.read().strip()) / 1000.0
+    except Exception:
+        return None
+
+
 class SensorReader:
     """Reads the DHT22 in a background thread and keeps the latest values."""
 
@@ -49,12 +58,13 @@ class SensorReader:
         self.interval = interval
         self.latest_temp_c = None
         self.latest_humidity = None
+        self.latest_cpu_temp = None
         self.last_read_time = None
         self._stop = threading.Event()
         self._log_path = log_path
         self._log_file = open(log_path, "w", newline="")
         self._csv = csv.writer(self._log_file)
-        self._csv.writerow(["timestamp", "temperature_c", "temperature_f", "humidity_percent"])
+        self._csv.writerow(["timestamp", "temperature_c", "temperature_f", "humidity_percent", "cpu_temp_c"])
         self._log_file.flush()
 
     def start(self):
@@ -69,17 +79,21 @@ class SensorReader:
                 if temp_c is not None and humidity is not None:
                     self.latest_temp_c = temp_c
                     self.latest_humidity = humidity
+                    self.latest_cpu_temp = get_cpu_temp()
                     self.last_read_time = datetime.now()
                     temp_f = temp_c * 9 / 5 + 32
+                    cpu_temp_str = f"{self.latest_cpu_temp:.1f}" if self.latest_cpu_temp is not None else ""
                     self._csv.writerow([
                         self.last_read_time.isoformat(timespec="seconds"),
                         f"{temp_c:.1f}",
                         f"{temp_f:.1f}",
                         f"{humidity:.1f}",
+                        cpu_temp_str,
                     ])
                     self._log_file.flush()
                     print(f"[{self.last_read_time.strftime('%H:%M:%S')}] "
-                          f"Temp: {temp_c:.1f}C ({temp_f:.1f}F)  Humidity: {humidity:.1f}%")
+                          f"Temp: {temp_c:.1f}C ({temp_f:.1f}F)  Humidity: {humidity:.1f}%  "
+                          f"CPU: {cpu_temp_str}C")
             except RuntimeError as e:
                 # DHT sensors regularly throw read errors -- this is normal, just retry.
                 print(f"Sensor read skipped: {e}")
@@ -91,7 +105,8 @@ class SensorReader:
         if self.latest_temp_c is None:
             return "Waiting for sensor reading..."
         temp_f = self.latest_temp_c * 9 / 5 + 32
-        return f"{self.latest_temp_c:.1f}C / {temp_f:.1f}F   {self.latest_humidity:.1f}% RH"
+        cpu_str = f"  CPU: {self.latest_cpu_temp:.1f}C" if self.latest_cpu_temp is not None else ""
+        return f"{self.latest_temp_c:.1f}C / {temp_f:.1f}F   {self.latest_humidity:.1f}% RH{cpu_str}"
 
     def stop(self):
         self._stop.set()
