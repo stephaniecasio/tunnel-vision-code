@@ -1,228 +1,144 @@
 #!/usr/bin/env python3
 """
-Record video from the Raspberry Pi camera (IMX219) while overlaying
-live temperature/humidity readings from a DHT22 sensor.
+capture_cycle.py
 
-Requirements (install before running):
-    sudo apt update
-    sudo apt install -y python3-picamera2 python3-opencv libgpiod2
-    pip install adafruit-circuitpython-dht --break-system-packages
+One full capture cycle:
+  1. Turn on LED (via MOSFET on GPIO7 / physical pin 26)
+  2. Record a 30-second video from all 4 IMX219s via the Arducam Camarray HAT
+  3. Read DHT22 temp/humidity (GPIO4 / physical pin 7)
+  4. Log timestamp + sensor readings + video filename to CSV
+  5. Turn off LED
 
-Wiring:
-    DHT22 data pin -> GPIO4 (physical pin 7) by default.
-    Change DHT_PIN below if you wired it elsewhere.
-    Don't forget: DHT22 needs a pull-up resistor (~10k) between
-    data and VCC if your breakout board doesn't already include one.
+Requires (install with: pip3 install --break-system-packages <pkg>):
+  - picamera2          (for video recording)
+  - adafruit-circuitpython-dht + adafruit-blinka   (for DHT22)
+  - RPi.GPIO           (for LED/MOSFET control)
 
-Usage:
-    python3 record_with_dht22.py --duration 30 --output myvideo.mp4
+CAMERA NOTE: The Arducam Camarray HAT combines all 4 IMX219 sensors into a
+single stitched 2x2 frame at the driver level. Picamera2 sees this as ONE
+camera (camera_num=0) and produces ONE video file containing all 4 feeds
+in quadrants -- there's no separate Picamera2 object per physical camera.
+This assumes the Camarray dtoverlay/driver is already configured in
+/boot/firmware/config.txt per Arducam's setup guide for your specific kit.
+
+NO RTC NOTE: No DS3231 is installed yet, so timestamps come from the Pi's
+system clock. If the Pi loses power/reboots without a chance to sync time
+(NTP or manual set), timestamps will drift or reset to boot defaults. Make
+sure the Pi's clock is correct before starting a run.
 """
 
-import argparse
-import time
-import threading
 import csv
-import subprocess
+import os
+import time
 from datetime import datetime
 
-import cv2
-import board
+import RPi.GPIO as GPIO
 import adafruit_dht
-
-from picamera2 import Picamera2, MappedArray, Preview
+import board
+from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
-from gpiozero import LED
+
+# ---------------- Configuration ----------------
+LED_PIN = 7                     # BCM GPIO7 = physical pin 26
+DHT_PIN = board.D4              # BCM GPIO4 = physical pin 7
+
+VIDEO_DIR = "/home/pi/captures/video"
+LOG_DIR = "/home/pi/captures/logs"
+LOG_FILE = os.path.join(LOG_DIR, "sensor_log.csv")
+
+RECORD_SECONDS = 30
+LED_WARMUP_SECONDS = 1          # small delay so LED is fully on before recording starts
+
+# ---------------- Setup ----------------
+os.makedirs(VIDEO_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(LED_PIN, GPIO.OUT, initial=GPIO.LOW)
+
+dht_device = adafruit_dht.DHT22(DHT_PIN)
 
 
-# ---- CONFIG ----
-DHT_PIN = board.D4          # GPIO4 / physical pin 7. Change if wired elsewhere.
-READ_INTERVAL = 2.5         # seconds between DHT22 reads (sensor can't go faster than ~2s reliably)
-VIDEO_WIDTH = 1920
-VIDEO_HEIGHT = 1080
-VIDEO_FPS = 30
-LED_PIN = 7           # GPIO connected to the MOSFET gate driving the LED strip (physical pin 26)
+def led_on():
+    GPIO.output(LED_PIN, GPIO.HIGH)
 
 
-def get_cpu_temp():
-    """Reads the Pi's CPU temperature in Celsius from the thermal zone file."""
-    try:
-        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
-            return int(f.read().strip()) / 1000.0
-    except Exception:
-        return None
+def led_off():
+    GPIO.output(LED_PIN, GPIO.LOW)
 
 
-class SensorReader:
-    """Reads the DHT22 in a background thread and keeps the latest values."""
-
-    def __init__(self, pin, interval, log_path):
-        self.dht = adafruit_dht.DHT22(pin, use_pulseio=False)
-        self.interval = interval
-        self.latest_temp_c = None
-        self.latest_humidity = None
-        self.latest_cpu_temp = None
-        self.last_read_time = None
-        self._stop = threading.Event()
-        self._log_path = log_path
-        self._log_file = open(log_path, "w", newline="")
-        self._csv = csv.writer(self._log_file)
-        self._csv.writerow(["timestamp", "temperature_c", "temperature_f", "humidity_percent", "cpu_temp_c"])
-        self._log_file.flush()
-
-    def start(self):
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self):
-        while not self._stop.is_set():
-            try:
-                temp_c = self.dht.temperature
-                humidity = self.dht.humidity
-                if temp_c is not None and humidity is not None:
-                    self.latest_temp_c = temp_c
-                    self.latest_humidity = humidity
-                    self.latest_cpu_temp = get_cpu_temp()
-                    self.last_read_time = datetime.now()
-                    temp_f = temp_c * 9 / 5 + 32
-                    cpu_temp_str = f"{self.latest_cpu_temp:.1f}" if self.latest_cpu_temp is not None else ""
-                    self._csv.writerow([
-                        self.last_read_time.isoformat(timespec="seconds"),
-                        f"{temp_c:.1f}",
-                        f"{temp_f:.1f}",
-                        f"{humidity:.1f}",
-                        cpu_temp_str,
-                    ])
-                    self._log_file.flush()
-                    print(f"[{self.last_read_time.strftime('%H:%M:%S')}] "
-                          f"Temp: {temp_c:.1f}C ({temp_f:.1f}F)  Humidity: {humidity:.1f}%  "
-                          f"CPU: {cpu_temp_str}C")
-            except RuntimeError as e:
-                # DHT sensors regularly throw read errors -- this is normal, just retry.
-                print(f"Sensor read skipped: {e}")
-            except Exception as e:
-                print(f"Unexpected sensor error: {e}")
-            time.sleep(self.interval)
-
-    def get_overlay_text(self):
-        if self.latest_temp_c is None:
-            return "Waiting for sensor reading..."
-        temp_f = self.latest_temp_c * 9 / 5 + 32
-        cpu_str = f"  CPU: {self.latest_cpu_temp:.1f}C" if self.latest_cpu_temp is not None else ""
-        return f"{self.latest_temp_c:.1f}C / {temp_f:.1f}F   {self.latest_humidity:.1f}% RH{cpu_str}"
-
-    def stop(self):
-        self._stop.set()
-        self._thread.join(timeout=2)
-        self._log_file.close()
-        try:
-            self.dht.exit()
-        except Exception:
-            pass
-
-
-def make_overlay_callback(sensor_reader):
-    """Returns a pre_callback function that draws the sensor text onto each frame."""
-
-    def overlay(request):
-        text = sensor_reader.get_overlay_text()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with MappedArray(request, "main") as m:
-            frame = m.array
-            # Semi-transparent bar behind the text for readability
-            cv2.rectangle(frame, (0, 0), (frame.shape[1], 60), (0, 0, 0), -1)
-            cv2.putText(frame, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(frame, timestamp, (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (200, 200, 200), 1, cv2.LINE_AA)
-
-    return overlay
-
-
-def push_to_github(files, commit_message):
-    """Stages, commits, and pushes the given files. Assumes the script is
-    run from inside a git repo that's already configured with a remote
-    and SSH auth set up (as covered earlier)."""
-    try:
-        subprocess.run(["git", "add"] + files, check=True)
-        subprocess.run(["git", "commit", "-m", commit_message], check=True)
-        subprocess.run(["git", "push"], check=True)
-        print("Pushed to GitHub successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Git push failed: {e}")
-        print("Files were saved locally but not pushed -- you can push manually later.")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Record video with DHT22 overlay")
-    parser.add_argument("--duration", type=int, default=30,
-                         help="Recording duration in seconds (default: 30)")
-    parser.add_argument("--output", type=str, default="recording.mp4",
-                         help="Output video filename (default: recording.mp4)")
-    parser.add_argument("--log", type=str, default="sensor_log.csv",
-                         help="Sensor CSV log filename (default: sensor_log.csv)")
-    parser.add_argument("--preview", action="store_true",
-                         help="Show a live preview window on the attached monitor while recording")
-    parser.add_argument("--led", action="store_true",
-                         help="Turn on the LED strip (via MOSFET) for the duration of the recording")
-    parser.add_argument("--push", action="store_true",
-                         help="Automatically git add/commit/push the video and log after recording finishes")
-    args = parser.parse_args()
-
-    print("Starting sensor reader...")
-    sensor_reader = SensorReader(DHT_PIN, READ_INTERVAL, args.log)
-    sensor_reader.start()
-
-    # Give the sensor a moment to get its first reading before we start overlaying
-    time.sleep(3)
-
-    print("Starting camera...")
-    picam2 = Picamera2()
-    video_config = picam2.create_video_configuration(
-        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"}
-    )
+def record_video(filepath, seconds):
+    """Records ONE video containing the combined 2x2 stitched frame from
+    all 4 IMX219 sensors on the Camarray HAT (camera_num=0)."""
+    picam2 = Picamera2(camera_num=0)
+    video_config = picam2.create_video_configuration()
     picam2.configure(video_config)
-    picam2.pre_callback = make_overlay_callback(sensor_reader)
 
-    if args.preview:
-        # DRM preview draws directly to the attached monitor without needing
-        # a desktop/X session -- works well on lower-powered boards like a Pi 3.
-        # If you're running the full desktop GUI and DRM fails, try Preview.QTGL instead.
-        picam2.start_preview(Preview.DRM)
-
-    led = LED(LED_PIN)
-
-    if args.led:
-        led.on()
-        print(f"LED strip ON (GPIO{LED_PIN})")
-
-    encoder = H264Encoder(bitrate=17_000_000)
-    output = FfmpegOutput(args.output)
+    encoder = H264Encoder()
+    output = FfmpegOutput(filepath)
 
     picam2.start_recording(encoder, output)
-    print(f"Recording for {args.duration} seconds -> {args.output}")
-    print(f"Sensor readings logging to -> {args.log}")
+    time.sleep(seconds)
+    picam2.stop_recording()
+    picam2.close()
+
+
+def read_dht22(retries=5, delay=2.0):
+    """DHT22 reads occasionally fail/glitch; retry a few times before giving up."""
+    for attempt in range(retries):
+        try:
+            temperature_c = dht_device.temperature
+            humidity = dht_device.humidity
+            if temperature_c is not None and humidity is not None:
+                return round(temperature_c, 2), round(humidity, 2)
+        except RuntimeError as e:
+            # Common transient DHT22 read errors — just retry
+            print(f"DHT22 read attempt {attempt + 1} failed: {e}")
+        time.sleep(delay)
+    return None, None
+
+
+def log_reading(timestamp, temp_c, humidity, video_filename):
+    file_exists = os.path.isfile(LOG_FILE)
+    with open(LOG_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp", "temperature_c", "humidity_percent", "video_file"])
+        writer.writerow([timestamp, temp_c, humidity, video_filename])
+
+
+def run_capture_cycle():
+    timestamp = datetime.now()
+    ts_str = timestamp.strftime("%Y%m%d_%H%M%S")
+    video_filename = f"video_{ts_str}.h264"
+    video_path = os.path.join(VIDEO_DIR, video_filename)
+
+    print(f"[{timestamp}] Starting capture cycle")
 
     try:
-        time.sleep(args.duration)
-    except KeyboardInterrupt:
-        print("Stopped early by user.")
-    finally:
-        picam2.stop_recording()
-        sensor_reader.stop()
-        if args.led:
-            led.off()
-            print(f"LED strip OFF (GPIO{LED_PIN})")
-        led.close()
-        print("Done.")
+        led_on()
+        time.sleep(LED_WARMUP_SECONDS)
 
-    if args.push:
-        print("Pushing files to GitHub...")
-        push_to_github(
-            [args.output, args.log],
-            f"Add recording and sensor log ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
-        )
+        print(f"[{timestamp}] Recording {RECORD_SECONDS}s video -> {video_path}")
+        record_video(video_path, RECORD_SECONDS)
+
+        print(f"[{timestamp}] Reading DHT22")
+        temp_c, humidity = read_dht22()
+
+        if temp_c is None:
+            print(f"[{timestamp}] WARNING: DHT22 read failed after retries")
+
+        log_reading(timestamp.isoformat(), temp_c, humidity, video_filename)
+        print(f"[{timestamp}] Logged: temp={temp_c}C humidity={humidity}% video={video_filename}")
+
+    finally:
+        led_off()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        run_capture_cycle()
+    finally:
+        GPIO.cleanup()
+        dht_device.exit()
