@@ -3,28 +3,16 @@
 capture_cycle.py
 
 One full capture cycle:
-  1. Turn on LED (via MOSFET on GPIO7 / physical pin 26)
-  2. Record a 30-second video from all 4 IMX219s via the Arducam Camarray HAT
-  3. Read DHT22 temp/humidity (GPIO4 / physical pin 7)
+  1. Turn on LED (MOSFET GPIO7 / physical pin 26)
+  2. Record a 30-second video from the Arducam IMX219 camera
+  3. Read DHT22 temperature/humidity (GPIO4 / physical pin 7)
   4. Log timestamp + sensor readings + video filename to CSV
   5. Turn off LED
 
-Requires (install with: pip3 install --break-system-packages <pkg>):
-  - picamera2          (for video recording)
-  - adafruit-circuitpython-dht + adafruit-blinka   (for DHT22)
-  - RPi.GPIO           (for LED/MOSFET control)
-
-CAMERA NOTE: The Arducam Camarray HAT combines all 4 IMX219 sensors into a
-single stitched 2x2 frame at the driver level. Picamera2 sees this as ONE
-camera (camera_num=0) and produces ONE video file containing all 4 feeds
-in quadrants -- there's no separate Picamera2 object per physical camera.
-This assumes the Camarray dtoverlay/driver is already configured in
-/boot/firmware/config.txt per Arducam's setup guide for your specific kit.
-
-NO RTC NOTE: No DS3231 is installed yet, so timestamps come from the Pi's
-system clock. If the Pi loses power/reboots without a chance to sync time
-(NTP or manual set), timestamps will drift or reset to boot defaults. Make
-sure the Pi's clock is correct before starting a run.
+Requirements:
+  pip3 install --break-system-packages picamera2
+  pip3 install --break-system-packages adafruit-circuitpython-dht adafruit-blinka
+  pip3 install --break-system-packages RPi.GPIO
 """
 
 import csv
@@ -35,111 +23,292 @@ from datetime import datetime
 import RPi.GPIO as GPIO
 import adafruit_dht
 import board
+
 from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
 
+
 # ---------------- Configuration ----------------
-LED_PIN = 7                     # BCM GPIO7 = physical pin 26
-DHT_PIN = board.D4              # BCM GPIO4 = physical pin 7
+
+LED_PIN = 7              # BCM GPIO7 = physical pin 26
+DHT_PIN = board.D4       # BCM GPIO4 = physical pin 7
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VIDEO_DIR = os.path.join(SCRIPT_DIR, "captures", "video")
-LOG_DIR = os.path.join(SCRIPT_DIR, "captures", "logs")
-LOG_FILE = os.path.join(LOG_DIR, "sensor_log.csv")
+
+VIDEO_DIR = os.path.join(
+    SCRIPT_DIR,
+    "captures",
+    "video"
+)
+
+LOG_DIR = os.path.join(
+    SCRIPT_DIR,
+    "captures",
+    "logs"
+)
+
+LOG_FILE = os.path.join(
+    LOG_DIR,
+    "sensor_log.csv"
+)
 
 RECORD_SECONDS = 30
-LED_WARMUP_SECONDS = 1          # small delay so LED is fully on before recording starts
+
+LED_WARMUP_SECONDS = 1
+
 
 # ---------------- Setup ----------------
+
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(LED_PIN, GPIO.OUT, initial=GPIO.LOW)
+GPIO.setup(
+    LED_PIN,
+    GPIO.OUT,
+    initial=GPIO.LOW
+)
 
 dht_device = adafruit_dht.DHT22(DHT_PIN)
 
 
+# ---------------- LED Control ----------------
+
 def led_on():
-    GPIO.output(LED_PIN, GPIO.HIGH)
+    GPIO.output(
+        LED_PIN,
+        GPIO.HIGH
+    )
 
 
 def led_off():
-    GPIO.output(LED_PIN, GPIO.LOW)
+    GPIO.output(
+        LED_PIN,
+        GPIO.LOW
+    )
 
+
+# ---------------- Camera ----------------
 
 def record_video(filepath, seconds):
-    """Records ONE video containing the combined 2x2 stitched frame from
-    all 4 IMX219 sensors on the Camarray HAT (camera_num=0)."""
+    """
+    Records video from Picamera2.
+    Output is MP4 through FFmpeg.
+    """
+
     picam2 = Picamera2(camera_num=0)
-    video_config = picam2.create_video_configuration()
+
+    video_config = picam2.create_video_configuration(
+        main={
+            "size": (1280, 720)
+        }
+    )
+
     picam2.configure(video_config)
 
-    encoder = H264Encoder()
-    output = FfmpegOutput(filepath)
+    encoder = H264Encoder(
+        bitrate=10000000
+    )
 
-    picam2.start_recording(encoder, output)
-    time.sleep(seconds)
-    picam2.stop_recording()
-    picam2.close()
+    output = FfmpegOutput(
+        filepath
+    )
+
+    try:
+        print("Starting camera...")
+
+        picam2.start()
+
+        # Allow sensor exposure/focus settings to stabilize
+        time.sleep(2)
+
+        print("Starting recording...")
+
+        picam2.start_recording(
+            encoder,
+            output
+        )
+
+        time.sleep(seconds)
+
+        picam2.stop_recording()
+
+        print("Recording complete")
+
+    finally:
+        picam2.close()
 
 
-def read_dht22(retries=5, delay=2.0):
-    """DHT22 reads occasionally fail/glitch; retry a few times before giving up."""
+# ---------------- DHT22 ----------------
+
+def read_dht22(retries=5, delay=2):
+
     for attempt in range(retries):
+
         try:
             temperature_c = dht_device.temperature
             humidity = dht_device.humidity
-            if temperature_c is not None and humidity is not None:
-                return round(temperature_c, 2), round(humidity, 2)
+
+            if (
+                temperature_c is not None
+                and humidity is not None
+            ):
+                return (
+                    round(temperature_c, 2),
+                    round(humidity, 2)
+                )
+
         except RuntimeError as e:
-            # Common transient DHT22 read errors — just retry
-            print(f"DHT22 read attempt {attempt + 1} failed: {e}")
+            print(
+                f"DHT22 attempt {attempt + 1} failed: {e}"
+            )
+
         time.sleep(delay)
+
     return None, None
 
 
-def log_reading(timestamp, temp_c, humidity, video_filename):
-    file_exists = os.path.isfile(LOG_FILE)
-    with open(LOG_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["timestamp", "temperature_c", "humidity_percent", "video_file"])
-        writer.writerow([timestamp, temp_c, humidity, video_filename])
+# ---------------- Logging ----------------
 
+def log_reading(
+    timestamp,
+    temp_c,
+    humidity,
+    video_filename
+):
+
+    file_exists = os.path.isfile(
+        LOG_FILE
+    )
+
+    with open(
+        LOG_FILE,
+        "a",
+        newline=""
+    ) as f:
+
+        writer = csv.writer(f)
+
+        if not file_exists:
+            writer.writerow(
+                [
+                    "timestamp",
+                    "temperature_c",
+                    "humidity_percent",
+                    "video_file"
+                ]
+            )
+
+        writer.writerow(
+            [
+                timestamp,
+                temp_c,
+                humidity,
+                video_filename
+            ]
+        )
+
+
+# ---------------- Main Cycle ----------------
 
 def run_capture_cycle():
-    timestamp = datetime.now()
-    ts_str = timestamp.strftime("%Y%m%d_%H%M%S")
-    video_filename = f"video_{ts_str}.h264"
-    video_path = os.path.join(VIDEO_DIR, video_filename)
 
-    print(f"[{timestamp}] Starting capture cycle")
+    start_time = datetime.now()
+
+    ts_str = start_time.strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    video_filename = (
+        f"video_{ts_str}.mp4"
+    )
+
+    video_path = os.path.join(
+        VIDEO_DIR,
+        video_filename
+    )
+
+
+    print(
+        f"[{start_time}] Starting capture cycle"
+    )
+
 
     try:
+
         led_on()
-        time.sleep(LED_WARMUP_SECONDS)
 
-        print(f"[{timestamp}] Recording {RECORD_SECONDS}s video -> {video_path}")
-        record_video(video_path, RECORD_SECONDS)
+        print("LED ON")
 
-        print(f"[{timestamp}] Reading DHT22")
+        time.sleep(
+            LED_WARMUP_SECONDS
+        )
+
+
+        print(
+            f"Recording {RECORD_SECONDS}s video -> {video_path}"
+        )
+
+
+        record_video(
+            video_path,
+            RECORD_SECONDS
+        )
+
+
+        print(
+            "Reading DHT22"
+        )
+
+
         temp_c, humidity = read_dht22()
 
-        if temp_c is None:
-            print(f"[{timestamp}] WARNING: DHT22 read failed after retries")
 
-        log_reading(timestamp.isoformat(), temp_c, humidity, video_filename)
-        print(f"[{timestamp}] Logged: temp={temp_c}C humidity={humidity}% video={video_filename}")
+        if temp_c is None:
+            print(
+                "WARNING: DHT22 read failed"
+            )
+
+
+        log_time = datetime.now().isoformat()
+
+
+        log_reading(
+            log_time,
+            temp_c,
+            humidity,
+            video_filename
+        )
+
+
+        print(
+            f"Logged: temp={temp_c}C humidity={humidity}% video={video_filename}"
+        )
+
 
     finally:
+
         led_off()
 
+        print(
+            "LED OFF"
+        )
+
+
+# ---------------- Run ----------------
 
 if __name__ == "__main__":
+
     try:
         run_capture_cycle()
+
     finally:
+
         GPIO.cleanup()
-        dht_device.exit()
+
+        try:
+            dht_device.exit()
+
+        except Exception:
+            pass
