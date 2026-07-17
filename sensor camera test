@@ -43,8 +43,9 @@ from picamera2.outputs import FfmpegOutput
 LED_PIN = 7                     # BCM GPIO7 = physical pin 26
 DHT_PIN = board.D4              # BCM GPIO4 = physical pin 7
 
-VIDEO_DIR = "/home/pi/captures/video"
-LOG_DIR = "/home/pi/captures/logs"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VIDEO_DIR = os.path.join(SCRIPT_DIR, "captures", "video")
+LOG_DIR = os.path.join(SCRIPT_DIR, "captures", "logs")
 LOG_FILE = os.path.join(LOG_DIR, "sensor_log.csv")
 
 RECORD_SECONDS = 30
