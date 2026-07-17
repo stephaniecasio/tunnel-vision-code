@@ -40,7 +40,7 @@ READ_INTERVAL = 2.5         # seconds between DHT22 reads (sensor can't go faste
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 VIDEO_FPS = 30
-LED_PIN = 18          # GPIO connected to the MOSFET gate driving the LED strip
+LED_PIN = 7           # GPIO connected to the MOSFET gate driving the LED strip (physical pin 26)
 
 
 def get_cpu_temp():
