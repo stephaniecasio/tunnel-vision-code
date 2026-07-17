@@ -22,6 +22,7 @@ import argparse
 import time
 import threading
 import csv
+import subprocess
 from datetime import datetime
 
 import cv2
@@ -138,6 +139,20 @@ def make_overlay_callback(sensor_reader):
     return overlay
 
 
+def push_to_github(files, commit_message):
+    """Stages, commits, and pushes the given files. Assumes the script is
+    run from inside a git repo that's already configured with a remote
+    and SSH auth set up (as covered earlier)."""
+    try:
+        subprocess.run(["git", "add"] + files, check=True)
+        subprocess.run(["git", "commit", "-m", commit_message], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print("Pushed to GitHub successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Git push failed: {e}")
+        print("Files were saved locally but not pushed -- you can push manually later.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record video with DHT22 overlay")
     parser.add_argument("--duration", type=int, default=30,
@@ -150,6 +165,8 @@ def main():
                          help="Show a live preview window on the attached monitor while recording")
     parser.add_argument("--led", action="store_true",
                          help="Turn on the LED strip (via MOSFET) for the duration of the recording")
+    parser.add_argument("--push", action="store_true",
+                         help="Automatically git add/commit/push the video and log after recording finishes")
     args = parser.parse_args()
 
     print("Starting sensor reader...")
@@ -198,6 +215,13 @@ def main():
             print(f"LED strip OFF (GPIO{LED_PIN})")
         led.close()
         print("Done.")
+
+    if args.push:
+        print("Pushing files to GitHub...")
+        push_to_github(
+            [args.output, args.log],
+            f"Add recording and sensor log ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+        )
 
 
 if __name__ == "__main__":
