@@ -31,14 +31,16 @@ import adafruit_dht
 from picamera2 import Picamera2, MappedArray, Preview
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
+from gpiozero import LED
 
 
 # ---- CONFIG ----
 DHT_PIN = board.D4          # GPIO4 / physical pin 7. Change if wired elsewhere.
 READ_INTERVAL = 2.5         # seconds between DHT22 reads (sensor can't go faster than ~2s reliably)
-VIDEO_WIDTH = 1280
-VIDEO_HEIGHT = 720
+VIDEO_WIDTH = 1920
+VIDEO_HEIGHT = 1080
 VIDEO_FPS = 30
+LED_PIN = 18          # GPIO connected to the MOSFET gate driving the LED strip
 
 
 def get_cpu_temp():
@@ -146,6 +148,8 @@ def main():
                          help="Sensor CSV log filename (default: sensor_log.csv)")
     parser.add_argument("--preview", action="store_true",
                          help="Show a live preview window on the attached monitor while recording")
+    parser.add_argument("--led", action="store_true",
+                         help="Turn on the LED strip (via MOSFET) for the duration of the recording")
     args = parser.parse_args()
 
     print("Starting sensor reader...")
@@ -169,7 +173,13 @@ def main():
         # If you're running the full desktop GUI and DRM fails, try Preview.QTGL instead.
         picam2.start_preview(Preview.DRM)
 
-    encoder = H264Encoder(bitrate=10_000_000)
+    led = LED(LED_PIN)
+
+    if args.led:
+        led.on()
+        print(f"LED strip ON (GPIO{LED_PIN})")
+
+    encoder = H264Encoder(bitrate=17_000_000)
     output = FfmpegOutput(args.output)
 
     picam2.start_recording(encoder, output)
@@ -183,6 +193,10 @@ def main():
     finally:
         picam2.stop_recording()
         sensor_reader.stop()
+        if args.led:
+            led.off()
+            print(f"LED strip OFF (GPIO{LED_PIN})")
+        led.close()
         print("Done.")
 
 
