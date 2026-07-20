@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""
+capture_cycle_dummy_temp.py
+
+TEST/DUMMY VERSION - no real DHT22 required.
+
+This simulates temperature readings so you can verify your LED on/off
+logic works, without needing to physically change the temperature.
+
+Logic:
+  - If simulated temp >= TEMP_THRESHOLD_C  -> LED ON
+  - If simulated temp <  TEMP_THRESHOLD_C  -> LED OFF
+
+Two ways to simulate readings (pick one via SIM_MODE below):
+  "alternate" - flips hot/cold every cycle, so you can watch LED toggle
+  "random"    - random temp each cycle within a range
+  "manual"    - hardcodes a value you edit by hand, for one-off tests
+
+Requirements:
+  pip3 install --break-system-packages RPi.GPIO
+"""
+
+import random
+import time
+from datetime import datetime
+
+import RPi.GPIO as GPIO
+
+
+# ---------------- Configuration ----------------
+
+LED_PIN = 23  # BCM GPIO23 / physical pin 16 (matches original script's comment/pin usage)
+
+TEMP_THRESHOLD_C = 25.0   # LED turns ON at/above this, OFF below it
+
+SIM_MODE = "alternate"    # "alternate" | "random" | "manual"
+
+MANUAL_TEMP_C = 30.0      # only used when SIM_MODE == "manual"
+
+RANDOM_TEMP_RANGE = (15.0, 35.0)  # only used when SIM_MODE == "random"
+
+CYCLE_SECONDS = 5         # how often to take a "reading" in this test loop
+
+
+# ---------------- Setup ----------------
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(LED_PIN, GPIO.OUT, initial=GPIO.LOW)
+
+
+# ---------------- LED Control ----------------
+
+def led_on():
+    GPIO.output(LED_PIN, GPIO.HIGH)
+
+
+def led_off():
+    GPIO.output(LED_PIN, GPIO.LOW)
+
+
+# ---------------- Simulated "sensor" ----------------
+
+_alternate_state = {"hot": True}  # mutable holder so the flag persists across calls
+
+
+def read_fake_temperature():
+    """
+    Returns a simulated temperature reading in Celsius.
+    Swap SIM_MODE above to change behavior.
+    """
+
+    if SIM_MODE == "manual":
+        return MANUAL_TEMP_C
+
+    if SIM_MODE == "random":
+        return round(random.uniform(*RANDOM_TEMP_RANGE), 2)
+
+    if SIM_MODE == "alternate":
+        # Flip between a "hot" reading and a "cold" reading each call
+        if _alternate_state["hot"]:
+            temp = TEMP_THRESHOLD_C + 5.0   # comfortably above threshold -> LED on
+        else:
+            temp = TEMP_THRESHOLD_C - 5.0   # comfortably below threshold -> LED off
+
+        _alternate_state["hot"] = not _alternate_state["hot"]
+
+        return round(temp, 2)
+
+    raise ValueError(f"Unknown SIM_MODE: {SIM_MODE}")
+
+
+# ---------------- Main Loop ----------------
+
+def run_test_loop(cycles=6):
+    """
+    Runs a fixed number of test cycles (default 6) so it doesn't run forever.
+    Change `cycles` or wrap in `while True:` if you want it continuous.
+    """
+
+    try:
+        for i in range(cycles):
+
+            temp_c = read_fake_temperature()
+
+            timestamp = datetime.now().isoformat(timespec="seconds")
+
+            if temp_c >= TEMP_THRESHOLD_C:
+                led_on()
+                state = "ON"
+            else:
+                led_off()
+                state = "OFF"
+
+            print(
+                f"[{timestamp}] cycle {i + 1}/{cycles} "
+                f"simulated_temp={temp_c}C threshold={TEMP_THRESHOLD_C}C -> LED {state}"
+            )
+
+            time.sleep(CYCLE_SECONDS)
+
+    finally:
+        led_off()
+        print("Test loop ended, LED forced OFF")
+
+
+if __name__ == "__main__":
+
+    try:
+        run_test_loop()
+
+    finally:
+        GPIO.cleanup()
