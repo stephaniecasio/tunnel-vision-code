@@ -1,0 +1,18 @@
+import time
+import RPi.GPIO as GPIO
+
+MOSFET_PIN = 23 # Corresponds to physical Pin 16
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(MOSFET_PIN, GPIO.OUT)
+
+try:
+    print("Turning MOSFET ON...")
+    GPIO.output(MOSFET_PIN, GPIO.HIGH)
+    time.sleep(5)
+    
+    print("Turning MOSFET OFF...")
+    GPIO.output(MOSFET_PIN, GPIO.LOW)
+
+finally:
+    GPIO.cleanup()
