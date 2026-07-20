@@ -31,7 +31,7 @@ from picamera2.outputs import FfmpegOutput
 
 # ---------------- Configuration ----------------
 
-LED_PIN = 7              # BCM GPIO7 = physical pin 26
+LED_PIN = 23              # BCM GPIO7 = physical pin 26
 DHT_PIN = board.D4       # BCM GPIO4 = physical pin 7
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
