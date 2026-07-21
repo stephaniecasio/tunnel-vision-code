@@ -2,12 +2,10 @@
 """
 capture_cycle.py
 
-One full capture cycle:
-  1. Turn on LED (MOSFET GPIO7 / physical pin 26)
-  2. Record a 30-second video from the Arducam IMX219 camera
-  3. Read DHT22 temperature/humidity (GPIO4 / physical pin 7)
-  4. Log timestamp + sensor readings + video filename to CSV
-  5. Turn off LED
+One full capture cycle (LED control removed):
+  1. Record a 30-second video from the Arducam IMX219 camera
+  2. Read DHT22 temperature/humidity (GPIO4 / physical pin 7)
+  3. Log timestamp + sensor readings + video filename to CSV
 
 Requirements:
   pip3 install --break-system-packages picamera2
@@ -31,7 +29,6 @@ from picamera2.outputs import FfmpegOutput
 
 # ---------------- Configuration ----------------
 
-LED_PIN = 23              # BCM GPIO7 = physical pin 26
 DHT_PIN = board.D4       # BCM GPIO4 = physical pin 7
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,8 +52,6 @@ LOG_FILE = os.path.join(
 
 RECORD_SECONDS = 30
 
-LED_WARMUP_SECONDS = 1
-
 
 # ---------------- Setup ----------------
 
@@ -64,29 +59,8 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(
-    LED_PIN,
-    GPIO.OUT,
-    initial=GPIO.LOW
-)
 
 dht_device = adafruit_dht.DHT22(DHT_PIN)
-
-
-# ---------------- LED Control ----------------
-
-def led_on():
-    GPIO.output(
-        LED_PIN,
-        GPIO.HIGH
-    )
-
-
-def led_off():
-    GPIO.output(
-        LED_PIN,
-        GPIO.LOW
-    )
 
 
 # ---------------- Camera ----------------
@@ -235,65 +209,45 @@ def run_capture_cycle():
     )
 
 
-    try:
-
-        led_on()
-
-        print("LED ON")
-
-        time.sleep(
-            LED_WARMUP_SECONDS
-        )
+    print(
+        f"Recording {RECORD_SECONDS}s video -> {video_path}"
+    )
 
 
+    record_video(
+        video_path,
+        RECORD_SECONDS
+    )
+
+
+    print(
+        "Reading DHT22"
+    )
+
+
+    temp_c, humidity = read_dht22()
+
+
+    if temp_c is None:
         print(
-            f"Recording {RECORD_SECONDS}s video -> {video_path}"
+            "WARNING: DHT22 read failed"
         )
 
 
-        record_video(
-            video_path,
-            RECORD_SECONDS
-        )
+    log_time = datetime.now().isoformat()
 
 
-        print(
-            "Reading DHT22"
-        )
+    log_reading(
+        log_time,
+        temp_c,
+        humidity,
+        video_filename
+    )
 
 
-        temp_c, humidity = read_dht22()
-
-
-        if temp_c is None:
-            print(
-                "WARNING: DHT22 read failed"
-            )
-
-
-        log_time = datetime.now().isoformat()
-
-
-        log_reading(
-            log_time,
-            temp_c,
-            humidity,
-            video_filename
-        )
-
-
-        print(
-            f"Logged: temp={temp_c}C humidity={humidity}% video={video_filename}"
-        )
-
-
-    finally:
-
-        led_off()
-
-        print(
-            "LED OFF"
-        )
+    print(
+        f"Logged: temp={temp_c}C humidity={humidity}% video={video_filename}"
+    )
 
 
 # ---------------- Run ----------------
