@@ -64,7 +64,7 @@ LOG_FILE = os.path.join(
     "sensor_log.csv"
 )
 
-RECORD_SECONDS = 30
+RECORD_SECONDS = 10
 
 
 # ---------------- Setup ----------------
